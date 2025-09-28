@@ -1,0 +1,91 @@
+# Email Processing Pipeline Configuration
+# MACHO-GPT v3.4-mini - HVDC Project
+
+system:
+  version: "v3.4-mini"
+  project: "HVDC_EMAIL_PROCESSING"
+  mode: "PRIME"  # PRIME|ORACLE|ZERO|LATTICE|RHYTHM|COST-GUARD
+
+email:
+  # IMAP Configuration
+  imap_server: "imap.gmail.com"
+  imap_port: 993
+  use_ssl: true
+  
+  # SMTP Configuration  
+  smtp_server: "smtp.gmail.com"
+  smtp_port: 587
+  use_tls: true
+  
+  # Authentication
+  username: "${EMAIL_USERNAME}"
+  password: "${EMAIL_PASSWORD}"
+  
+  # Processing settings
+  batch_size: 50
+  max_retries: 3
+  retry_delay: 5  # seconds
+  confidence_threshold: 0.90
+
+processing:
+  # OCR Settings
+  ocr_engine: "tesseract"
+  ocr_language: "eng+kor"
+  ocr_confidence_threshold: 0.85
+  
+  # Document processing
+  supported_formats: ["pdf", "png", "jpg", "jpeg", "tiff"]
+  max_file_size: 10485760  # 10MB
+  
+  # Data extraction
+  extract_invoice_data: true
+  extract_attachment_data: true
+  validate_hs_codes: true
+
+logistics:
+  # HVDC specific settings
+  fanr_compliance_check: true
+  moiat_compliance_check: true
+  pressure_limit: 4.0  # t/m²
+  utilization_threshold: 85  # %
+  
+  # Auto-triggers
+  auto_triggers:
+    rate_change_threshold: 10  # %
+    eta_delay_threshold: 24    # hours
+    cert_expiry_days: 30       # days
+
+logging:
+  level: "INFO"
+  format: "{time:YYYY-MM-DD HH:mm:ss} | {level} | {name} | {message}"
+  file: "logs/email_processing_{time:YYYY-MM-DD}.log"
+  rotation: "1 day"
+  retention: "30 days"
+
+output:
+  # Data storage
+  database_url: "sqlite:///email_processing.db"
+  excel_output: true
+  json_output: true
+  
+  # File organization
+  processed_folder: "processed_emails"
+  attachments_folder: "email_attachments"
+  reports_folder: "email_reports"
+  
+  # Naming conventions
+  file_prefix: "email_"
+  timestamp_format: "%Y%m%d_%H%M%S"
+
+security:
+  # PII protection
+  mask_personal_data: true
+  encrypt_sensitive_data: true
+  
+  # NDA compliance
+  content_screening: true
+  audit_trail: true
+  
+  # Access control
+  require_authentication: true
+  session_timeout: 3600  # seconds

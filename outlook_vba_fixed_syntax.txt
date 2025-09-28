@@ -1,0 +1,545 @@
+﻿#If VBA7 Then
+    Private Declare PtrSafe Sub Sleep Lib "kernel32" (ByVal dwMilliseconds As LongPtr)
+#Else
+    Private Declare Sub Sleep Lib "kernel32" (ByVal dwMilliseconds As Long)
+#End If
+
+Option Explicit
+
+Private Const CAPTURE_FOLDER As String = "C:\HVDC\EmailCapture\"
+Private Const ATTACHMENT_FOLDER As String = "C:\HVDC\EmailCapture\Attachments\"
+Private Const PYTHON_SCRIPT As String = "C:\HVDC\email_processing_pipeline\run_cli.py"
+
+Public Sub InitializeEmailCapture()
+    CreateCaptureFolders
+    LogMessage "HVDC 이메일 캡처 시스템이 초기화되었습니다."
+End Sub
+
+Public Sub ProcessSelectedEmail()
+    Dim olMail As Outlook.MailItem
+
+    On Error GoTo Handler
+
+    If Application.ActiveExplorer Is Nothing Then
+        MsgBox "활성 Outlook 탐색기가 없습니다.", vbExclamation
+        Exit Sub
+    End If
+
+    If Application.ActiveExplorer.Selection.Count = 0 Then
+        MsgBox "이메일을 선택해주세요.", vbExclamation
+        Exit Sub
+    End If
+
+    Set olMail = Application.ActiveExplorer.Selection(1)
+
+    If Not olMail Is Nothing Then
+        ProcessEmail olMail
+        MsgBox "이메일이 캡처되었습니다.", vbInformation
+    Else
+        MsgBox "선택된 항목이 메일이 아닙니다.", vbExclamation
+    End If
+
+    GoTo Cleanup
+
+Handler:
+    MsgBox "이메일 처리 중 오류가 발생했습니다: " & Err.Description, vbCritical
+
+Cleanup:
+    Set olMail = Nothing
+End Sub
+
+Public Sub ProcessAllInboxEmails()
+    Const MAX_ITEMS_PER_RUN As Long = 75
+    Const YIELD_EVERY As Long = 5
+    Const SLEEP_MILLISECONDS As Long = 150
+
+    Dim olFolder As Outlook.Folder
+    Dim olItems As Outlook.Items
+    Dim olItem As Object
+    Dim olMail As Outlook.MailItem
+    Dim processed As Long
+    Dim inspected As Long
+    Dim entryIDs As Collection
+    Dim idx As Long
+
+    On Error GoTo ProcessAllError
+
+    Set olFolder = Application.Session.GetDefaultFolder(olFolderInbox)
+    Set olItems = olFolder.Items.Restrict("[MessageClass]='IPM.Note'")
+    olItems.Sort "[ReceivedTime]", True
+
+    If olItems.Count = 0 Then
+        MsgBox "처리할 이메일이 없습니다.", vbInformation
+        GoTo Cleanup
+    End If
+
+    Set entryIDs = New Collection
+    Set olItem = olItems.GetFirst
+    Do While Not olItem Is Nothing
+        inspected = inspected + 1
+        If TypeOf olItem Is Outlook.MailItem Then
+            entryIDs.Add olItem.EntryID
+            If entryIDs.Count >= MAX_ITEMS_PER_RUN Then Exit Do
+        End If
+        Set olItem = olItems.GetNext
+    Loop
+
+    If entryIDs.Count = 0 Then
+        MsgBox "처리할 메일이 없습니다.", vbInformation
+        GoTo Cleanup
+    End If
+
+    For idx = 1 To entryIDs.Count
+        On Error GoTo SingleItemError
+        Set olMail = Application.Session.GetItemFromID(entryIDs(idx))
+
+        If Not olMail Is Nothing Then
+            If ShouldCapture(olMail) Then
+                ProcessEmail olMail
+                processed = processed + 1
+            End If
+        End If
+
+ContinueLoop:
+        If (idx Mod YIELD_EVERY) = 0 Then
+            DoEvents
+            Sleep SLEEP_MILLISECONDS
+        End If
+
+        Set olMail = Nothing
+        On Error GoTo ProcessAllError
+    Next idx
+
+    If inspected > entryIDs.Count Then
+        MsgBox processed & "개의 이메일이 처리되었습니다. (총 " & inspected & "개 중 첫 " & entryIDs.Count & "개 처리)", vbInformation
+    Else
+        MsgBox processed & "개의 이메일이 처리되었습니다.", vbInformation
+    End If
+
+    GoTo Cleanup
+
+SingleItemError:
+    LogError "ProcessAllInboxEmails", Err.Number, Err.Description
+    Err.Clear
+    Set olMail = Nothing
+    On Error GoTo ProcessAllError
+    Resume ContinueLoop
+
+ProcessAllError:
+    MsgBox "전체 메일 처리 중 오류가 발생했습니다: " & Err.Description, vbCritical
+
+Cleanup:
+    Set olMail = Nothing
+    Set olItem = Nothing
+    Set olItems = Nothing
+    Set entryIDs = Nothing
+    Set olFolder = Nothing
+End Sub
+
+Private Sub ProcessEmail(olMail As Outlook.MailItem)
+    Dim fileName As String
+    Dim filePath As String
+    Dim entryID As String
+    Dim captureTime As String
+
+    On Error GoTo ErrorHandler
+
+    entryID = olMail.EntryID
+    captureTime = Format(Now, "yyyymmdd_hhmmss")
+    fileName = "email_" & captureTime & "_" & Left(entryID, 8) & ".msg"
+    filePath = CAPTURE_FOLDER & fileName
+
+    olMail.SaveAs filePath, OlSaveAsType.olMSG
+
+    If olMail.Attachments.Count > 0 Then
+        ProcessAttachments olMail, entryID
+    End If
+
+    LogEmailCapture olMail, filePath
+    SendToPipeline filePath, entryID
+
+    GoTo Cleanup
+
+ErrorHandler:
+    LogError "ProcessEmail", Err.Number, Err.Description
+
+Cleanup:
+    Exit Sub
+End Sub
+
+Private Sub ProcessAttachments(olMail As Outlook.MailItem, entryID As String)
+    Dim att As Outlook.Attachment
+    Dim attPath As String
+    Dim attFolder As String
+    Dim i As Long
+
+    On Error GoTo ErrorHandler
+
+    attFolder = ATTACHMENT_FOLDER & Left(entryID, 8) & "\"
+    CreateFolderIfNotExists attFolder
+
+    For i = 1 To olMail.Attachments.Count
+        Set att = olMail.Attachments(i)
+        attPath = attFolder & CleanFileName(att.FileName)
+        att.SaveAsFile attPath
+    Next i
+
+    GoTo Cleanup
+
+ErrorHandler:
+    LogError "ProcessAttachments", Err.Number, Err.Description
+
+Cleanup:
+    Set att = Nothing
+End Sub
+
+Private Function ShouldCapture(olMail As Outlook.MailItem) As Boolean
+    On Error GoTo Handler
+
+    ShouldCapture = IsCurrentUserRecipient(olMail)
+    Exit Function
+
+Handler:
+    LogError "ShouldCapture", Err.Number, Err.Description
+    ShouldCapture = False
+End Function
+
+Private Function IsCurrentUserRecipient(olMail As Outlook.MailItem) As Boolean
+    Dim currentEntry As Outlook.AddressEntry
+    Dim currentSmtp As String
+    Dim currentAddress As String
+    Dim currentName As String
+    Dim recipient As Outlook.Recipient
+    Dim recipientSmtp As String
+    Dim recipientAddress As String
+    Dim recipientName As String
+
+    On Error GoTo Handler
+
+    Set currentEntry = Application.Session.CurrentUser.AddressEntry
+    currentSmtp = NormalizeAddress(GetAddressEntrySmtp(currentEntry))
+    currentAddress = NormalizeAddress(currentEntry.Address)
+    currentName = NormalizeAddress(currentEntry.Name)
+
+    For Each recipient In olMail.Recipients
+        recipientSmtp = NormalizeAddress(GetRecipientSmtpAddress(recipient))
+        recipientAddress = NormalizeAddress(recipient.Address)
+        recipientName = NormalizeAddress(recipient.Name)
+
+        If (Len(currentSmtp) > 0 And recipientSmtp = currentSmtp) _
+            Or (Len(currentAddress) > 0 And recipientAddress = currentAddress) _
+            Or (Len(currentName) > 0 And recipientName = currentName) Then
+            IsCurrentUserRecipient = True
+            Exit Function
+        End If
+    Next recipient
+
+    IsCurrentUserRecipient = False
+    Exit Function
+
+Handler:
+    LogError "IsCurrentUserRecipient", Err.Number, Err.Description
+    IsCurrentUserRecipient = False
+End Function
+
+Private Function NormalizeAddress(value As String) As String
+    Dim cleaned As String
+
+    cleaned = LCase$(Trim$(value & ""))
+    If Left$(cleaned, 5) = "smtp:" Then
+        cleaned = Mid$(cleaned, 6)
+    End If
+    NormalizeAddress = cleaned
+End Function
+
+Private Function GetRecipientSmtpAddress(recipient As Outlook.Recipient) As String
+    Dim entry As Outlook.AddressEntry
+
+    On Error GoTo Handler
+
+    If recipient Is Nothing Then Exit Function
+
+    Set entry = recipient.AddressEntry
+    GetRecipientSmtpAddress = GetAddressEntrySmtp(entry)
+    If Len(GetRecipientSmtpAddress) = 0 Then
+        GetRecipientSmtpAddress = recipient.Address & ""
+    End If
+
+    Exit Function
+
+Handler:
+    GetRecipientSmtpAddress = recipient.Address & ""
+End Function
+
+Private Function GetAddressEntrySmtp(entry As Outlook.AddressEntry) As String
+    Dim exchUser As Outlook.ExchangeUser
+
+    On Error GoTo Handler
+
+    If entry Is Nothing Then Exit Function
+
+    Select Case entry.AddressEntryUserType
+        Case OlAddressEntryUserType.olExchangeUserAddressEntry, _
+             OlAddressEntryUserType.olExchangeRemoteUserAddressEntry
+            Set exchUser = entry.GetExchangeUser
+            If Not exchUser Is Nothing Then
+                GetAddressEntrySmtp = exchUser.PrimarySmtpAddress
+                Exit Function
+            End If
+        Case OlAddressEntryUserType.olSmtpAddressEntry, _
+             OlAddressEntryUserType.olOutlookContactAddressEntry, _
+             OlAddressEntryUserType.olOutlookUserAddressEntry
+            GetAddressEntrySmtp = entry.Address & ""
+            Exit Function
+        Case Else
+            GetAddressEntrySmtp = entry.Address & ""
+            Exit Function
+    End Select
+
+    Exit Function
+
+Handler:
+    GetAddressEntrySmtp = entry.Address & ""
+End Function
+
+Private Sub CreateCaptureFolders()
+    CreateFolderIfNotExists CAPTURE_FOLDER
+    CreateFolderIfNotExists ATTACHMENT_FOLDER
+End Sub
+
+Private Sub CreateFolderIfNotExists(folderPath As String)
+    Dim fso As Object
+    Set fso = CreateObject("Scripting.FileSystemObject")
+
+    If Not fso.FolderExists(folderPath) Then
+        fso.CreateFolder folderPath
+    End If
+End Sub
+
+Private Sub LogEmailCapture(olMail As Outlook.MailItem, filePath As String)
+    Dim logFile As String
+    Dim logText As String
+    Dim fso As Object
+    Dim logStream As Object
+
+    On Error GoTo ErrorHandler
+
+    logFile = CAPTURE_FOLDER & "capture_log.txt"
+    Set fso = CreateObject("Scripting.FileSystemObject")
+
+    logText = Format(Now, "yyyy-mm-dd hh:mm:ss") & " | " & _
+              "CAPTURED" & " | " & _
+              olMail.Subject & " | " & _
+              olMail.SenderName & " | " & _
+              filePath & vbCrLf
+
+    If fso.FileExists(logFile) Then
+        Set logStream = fso.OpenTextFile(logFile, 8, True)
+    Else
+        Set logStream = fso.CreateTextFile(logFile, True)
+    End If
+
+    logStream.Write logText
+    logStream.Close
+    GoTo Cleanup
+
+ErrorHandler:
+    LogError "LogEmailCapture", Err.Number, Err.Description
+
+Cleanup:
+    Set logStream = Nothing
+    Set fso = Nothing
+End Sub
+
+Private Sub LogMessage(message As String)
+    Dim logFile As String
+    Dim logText As String
+    Dim fso As Object
+    Dim logStream As Object
+
+    On Error GoTo ErrorHandler
+
+    logFile = CAPTURE_FOLDER & "system_log.txt"
+    Set fso = CreateObject("Scripting.FileSystemObject")
+
+    logText = Format(Now, "yyyy-mm-dd hh:mm:ss") & " | " & message & vbCrLf
+
+    If fso.FileExists(logFile) Then
+        Set logStream = fso.OpenTextFile(logFile, 8, True)
+    Else
+        Set logStream = fso.CreateTextFile(logFile, True)
+    End If
+
+    logStream.Write logText
+    logStream.Close
+    GoTo Cleanup
+
+ErrorHandler:
+    ' 시스템 로그는 오류 시 조용히 무시
+
+Cleanup:
+    Set logStream = Nothing
+    Set fso = Nothing
+End Sub
+
+Private Sub LogError(functionName As String, errorNumber As Long, errorDescription As String)
+    Dim logFile As String
+    Dim logText As String
+    Dim fso As Object
+    Dim logStream As Object
+
+    On Error Resume Next
+
+    logFile = CAPTURE_FOLDER & "error_log.txt"
+    Set fso = CreateObject("Scripting.FileSystemObject")
+
+    logText = Format(Now, "yyyy-mm-dd hh:mm:ss") & " | " & _
+              "ERROR" & " | " & _
+              functionName & " | " & _
+              "Error " & errorNumber & ": " & errorDescription & vbCrLf
+
+    If fso.FileExists(logFile) Then
+        Set logStream = fso.OpenTextFile(logFile, 8, True)
+    Else
+        Set logStream = fso.CreateTextFile(logFile, True)
+    End If
+
+    logStream.Write logText
+    logStream.Close
+End Sub
+
+Private Sub SendToPipeline(filePath As String, entryID As String)
+    Dim command As String
+    Dim fso As Object
+
+    On Error GoTo ErrorHandler
+
+    Set fso = CreateObject("Scripting.FileSystemObject")
+    If Not fso.FileExists(PYTHON_SCRIPT) Then
+        LogMessage "Python 스크립트를 찾을 수 없습니다: " & PYTHON_SCRIPT
+        GoTo Cleanup
+    End If
+
+    command = "python """ & PYTHON_SCRIPT & """ ingest """ & filePath & """ --entry-id """ & entryID & """"
+
+    Call Shell(command, vbHide)
+
+    LogMessage "Python 파이프라인으로 전송: " & filePath
+    GoTo Cleanup
+
+ErrorHandler:
+    LogError "SendToPipeline", Err.Number, Err.Description
+
+Cleanup:
+    Set fso = Nothing
+End Sub
+
+Private Function CleanFileName(fileName As String) As String
+    Dim cleanName As String
+    Dim i As Long
+    Dim ch As String
+    Dim chCode As Integer
+
+    cleanName = ""
+    For i = 1 To Len(fileName)
+        ch = Mid(fileName, i, 1)
+        chCode = AscW(ch)
+
+        If chCode >= 32 And chCode <= 126 And _
+           ch <> "<" And ch <> ">" And ch <> ":" And _
+           ch <> Chr(34) And ch <> "/" And ch <> "\" And _
+           ch <> "|" And ch <> "?" And ch <> "*" Then
+            cleanName = cleanName & ch
+        Else
+            cleanName = cleanName & "_"
+        End If
+    Next i
+
+    CleanFileName = cleanName
+End Function
+
+Private Function MaxValue(a As Long, b As Long) As Long
+    If a > b Then
+        MaxValue = a
+    Else
+        MaxValue = b
+    End If
+End Function
+
+Public Sub ShowCaptureStatus()
+    Dim logFile As String
+    Dim fso As Object
+    Dim logStream As Object
+    Dim logContent As String
+    Dim lines As Variant
+    Dim recentLines As String
+    Dim i As Long
+    Dim startLine As Long
+
+    On Error GoTo ErrorHandler
+
+    logFile = CAPTURE_FOLDER & "capture_log.txt"
+    Set fso = CreateObject("Scripting.FileSystemObject")
+
+    If fso.FileExists(logFile) Then
+        Set logStream = fso.OpenTextFile(logFile, 1, False)
+        logContent = logStream.ReadAll
+        logStream.Close
+
+        lines = Split(logContent, vbCrLf)
+        startLine = MaxValue(0, UBound(lines) - 9)
+
+        For i = startLine To UBound(lines)
+            If Trim$(lines(i)) <> "" Then
+                recentLines = recentLines & lines(i) & vbCrLf
+            End If
+        Next i
+
+        MsgBox "최근 캡처 이력:" & vbCrLf & vbCrLf & recentLines, vbInformation, "HVDC 이메일 캡처 상태"
+    Else
+        MsgBox "캡처 로그 파일을 찾을 수 없습니다.", vbExclamation
+    End If
+
+    GoTo Cleanup
+
+ErrorHandler:
+    MsgBox "상태 확인 중 오류가 발생했습니다: " & Err.Description, vbCritical
+
+Cleanup:
+    Set logStream = Nothing
+    Set fso = Nothing
+End Sub
+
+Public Sub ClearLogs()
+    Dim fso As Object
+    Dim logFiles As Variant
+    Dim i As Long
+
+    On Error GoTo ErrorHandler
+
+    Set fso = CreateObject("Scripting.FileSystemObject")
+    logFiles = Array("capture_log.txt", "error_log.txt", "system_log.txt")
+
+    For i = LBound(logFiles) To UBound(logFiles)
+        If fso.FileExists(CAPTURE_FOLDER & logFiles(i)) Then
+            fso.DeleteFile CAPTURE_FOLDER & logFiles(i)
+        End If
+    Next i
+
+    MsgBox "로그 파일이 정리되었습니다.", vbInformation
+    GoTo Cleanup
+
+ErrorHandler:
+    MsgBox "로그 정리 중 오류가 발생했습니다: " & Err.Description, vbCritical
+
+Cleanup:
+    Set fso = Nothing
+End Sub
+
+
+
+
+
+
+
+

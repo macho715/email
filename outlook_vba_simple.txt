@@ -1,0 +1,321 @@
+Option Explicit
+
+Private Const CAPTURE_FOLDER As String = "C:\HVDC\EmailCapture\"
+Private Const ATTACHMENT_FOLDER As String = "C:\HVDC\EmailCapture\Attachments\"
+Private Const PYTHON_SCRIPT As String = "C:\HVDC\email_processing_pipeline\run_cli.py"
+
+Public Sub InitializeEmailCapture()
+    CreateCaptureFolders
+    LogMessage "HVDC 이메일 캡처 시스템이 초기화되었습니다."
+End Sub
+
+Public Sub ProcessSelectedEmail()
+    Dim olMail As MailItem
+    Set olMail = Application.ActiveExplorer.Selection(1)
+    
+    If Not olMail Is Nothing Then
+        ProcessEmail olMail
+        MsgBox "이메일이 캡처되었습니다.", vbInformation
+    Else
+        MsgBox "이메일을 선택해주세요.", vbExclamation
+    End If
+End Sub
+
+Public Sub ProcessAllInboxEmails()
+    Dim olFolder As Folder
+    Dim olItems As Items
+    Dim olItem As Object
+    Dim olMail As MailItem
+    Dim i As Integer
+    Dim count As Integer
+    
+    Set olFolder = Application.Session.GetDefaultFolder(olFolderInbox)
+    Set olItems = olFolder.Items
+    
+    count = 0
+    For i = 1 To olItems.Count
+        Set olItem = olItems(i)
+        If olItem.Class = OlObjectClass.olMail Then
+            Set olMail = olItem
+            If ShouldCapture(olMail) Then
+                ProcessEmail olMail
+                count = count + 1
+            End If
+        End If
+    Next i
+    
+    MsgBox count & "개의 이메일이 처리되었습니다.", vbInformation
+End Sub
+
+Private Sub ProcessEmail(olMail As MailItem)
+    Dim fileName As String
+    Dim filePath As String
+    Dim entryID As String
+    Dim captureTime As String
+    
+    On Error GoTo ErrorHandler
+    
+    entryID = olMail.EntryID
+    captureTime = Format(Now, "yyyymmdd_hhmmss")
+    fileName = "email_" & captureTime & "_" & Left(entryID, 8) & ".msg"
+    filePath = CAPTURE_FOLDER & fileName
+    
+    olMail.SaveAs filePath, OlSaveAsType.olMSG
+    
+    If olMail.Attachments.Count > 0 Then
+        ProcessAttachments olMail, entryID
+    End If
+    
+    LogEmailCapture olMail, filePath
+    SendToPipeline filePath, entryID
+    
+    Exit Sub
+    
+ErrorHandler:
+    LogError "ProcessEmail", Err.Number, Err.Description
+    Resume Next
+End Sub
+
+Private Sub ProcessAttachments(olMail As MailItem, entryID As String)
+    Dim att As Outlook.Attachment
+    Dim attPath As String
+    Dim attFolder As String
+    Dim i As Integer
+    
+    On Error GoTo ErrorHandler
+    
+    attFolder = ATTACHMENT_FOLDER & Left(entryID, 8) & "\"
+    CreateFolderIfNotExists attFolder
+    
+    For i = 1 To olMail.Attachments.Count
+        Set att = olMail.Attachments(i)
+        attPath = attFolder & CleanFileName(att.FileName)
+        att.SaveAsFile attPath
+    Next i
+    
+    Exit Sub
+    
+ErrorHandler:
+    LogError "ProcessAttachments", Err.Number, Err.Description
+    Resume Next
+End Sub
+
+Private Function ShouldCapture(olMail As MailItem) As Boolean
+    ShouldCapture = True
+End Function
+
+Private Sub CreateCaptureFolders()
+    CreateFolderIfNotExists CAPTURE_FOLDER
+    CreateFolderIfNotExists ATTACHMENT_FOLDER
+End Sub
+
+Private Sub CreateFolderIfNotExists(folderPath As String)
+    Dim fso As Object
+    Set fso = CreateObject("Scripting.FileSystemObject")
+    
+    If Not fso.FolderExists(folderPath) Then
+        fso.CreateFolder folderPath
+    End If
+End Sub
+
+Private Sub LogEmailCapture(olMail As MailItem, filePath As String)
+    Dim logFile As String
+    Dim logText As String
+    Dim fso As Object
+    Dim logStream As Object
+    
+    On Error GoTo ErrorHandler
+    
+    logFile = CAPTURE_FOLDER & "capture_log.txt"
+    Set fso = CreateObject("Scripting.FileSystemObject")
+    
+    logText = Format(Now, "yyyy-mm-dd hh:mm:ss") & " | " & _
+              "CAPTURED" & " | " & _
+              olMail.Subject & " | " & _
+              olMail.SenderName & " | " & _
+              filePath & vbCrLf
+    
+    If fso.FileExists(logFile) Then
+        Set logStream = fso.OpenTextFile(logFile, 8, True)
+    Else
+        Set logStream = fso.CreateTextFile(logFile, True)
+    End If
+    
+    logStream.Write logText
+    logStream.Close
+    
+    Exit Sub
+    
+ErrorHandler:
+    LogError "LogEmailCapture", Err.Number, Err.Description
+    Resume Next
+End Sub
+
+Private Sub LogMessage(message As String)
+    Dim logFile As String
+    Dim logText As String
+    Dim fso As Object
+    Dim logStream As Object
+    
+    On Error GoTo ErrorHandler
+    
+    logFile = CAPTURE_FOLDER & "system_log.txt"
+    Set fso = CreateObject("Scripting.FileSystemObject")
+    
+    logText = Format(Now, "yyyy-mm-dd hh:mm:ss") & " | " & message & vbCrLf
+    
+    If fso.FileExists(logFile) Then
+        Set logStream = fso.OpenTextFile(logFile, 8, True)
+    Else
+        Set logStream = fso.CreateTextFile(logFile, True)
+    End If
+    
+    logStream.Write logText
+    logStream.Close
+    
+    Exit Sub
+    
+ErrorHandler:
+    Resume Next
+End Sub
+
+Private Sub LogError(functionName As String, errorNumber As Long, errorDescription As String)
+    Dim logFile As String
+    Dim logText As String
+    Dim fso As Object
+    Dim logStream As Object
+    
+    On Error Resume Next
+    
+    logFile = CAPTURE_FOLDER & "error_log.txt"
+    Set fso = CreateObject("Scripting.FileSystemObject")
+    
+    logText = Format(Now, "yyyy-mm-dd hh:mm:ss") & " | " & _
+              "ERROR" & " | " & _
+              functionName & " | " & _
+              "Error " & errorNumber & ": " & errorDescription & vbCrLf
+    
+    If fso.FileExists(logFile) Then
+        Set logStream = fso.OpenTextFile(logFile, 8, True)
+    Else
+        Set logStream = fso.CreateTextFile(logFile, True)
+    End If
+    
+    logStream.Write logText
+    logStream.Close
+End Sub
+
+Private Sub SendToPipeline(filePath As String, entryID As String)
+    Dim command As String
+    Dim fso As Object
+    
+    On Error GoTo ErrorHandler
+    
+    Set fso = CreateObject("Scripting.FileSystemObject")
+    If Not fso.FileExists(PYTHON_SCRIPT) Then
+        LogMessage "Python 스크립트를 찾을 수 없습니다: " & PYTHON_SCRIPT
+        Exit Sub
+    End If
+    
+    command = "python """ & PYTHON_SCRIPT & """ ingest """ & filePath & """ --entry-id """ & entryID & """"
+    
+    Call Shell(command, vbHide)
+    
+    LogMessage "Python 파이프라인으로 전송: " & filePath
+    
+    Exit Sub
+    
+ErrorHandler:
+    LogError "SendToPipeline", Err.Number, Err.Description
+    Resume Next
+End Sub
+
+Private Function CleanFileName(fileName As String) As String
+    Dim cleanName As String
+    Dim i As Integer
+    Dim char As String
+    
+    cleanName = ""
+    For i = 1 To Len(fileName)
+        char = Mid(fileName, i, 1)
+        If char >= " " And char <= "~" And char <> "<" And char <> ">" And char <> ":" And char <> """ And char <> "/" And char <> "\" And char <> "|" And char <> "?" And char <> "*" Then
+            cleanName = cleanName & char
+        Else
+            cleanName = cleanName & "_"
+        End If
+    Next i
+    
+    CleanFileName = cleanName
+End Function
+
+Private Function MaxValue(a As Long, b As Long) As Long
+    If a > b Then
+        MaxValue = a
+    Else
+        MaxValue = b
+    End If
+End Function
+
+Public Sub ShowCaptureStatus()
+    Dim logFile As String
+    Dim fso As Object
+    Dim logStream As Object
+    Dim logContent As String
+    
+    On Error GoTo ErrorHandler
+    
+    logFile = CAPTURE_FOLDER & "capture_log.txt"
+    Set fso = CreateObject("Scripting.FileSystemObject")
+    
+    If fso.FileExists(logFile) Then
+        Set logStream = fso.OpenTextFile(logFile, 1, False)
+        logContent = logStream.ReadAll
+        logStream.Close
+        
+        Dim lines As Variant
+        lines = Split(logContent, vbCrLf)
+        Dim recentLines As String
+        Dim i As Integer
+        Dim startLine As Integer
+        
+        startLine = MaxValue(0, UBound(lines) - 9)
+        For i = startLine To UBound(lines)
+            If Trim(lines(i)) <> "" Then
+                recentLines = recentLines & lines(i) & vbCrLf
+            End If
+        Next i
+        
+        MsgBox "최근 캡처 이력:" & vbCrLf & vbCrLf & recentLines, vbInformation, "HVDC 이메일 캡처 상태"
+    Else
+        MsgBox "캡처 로그 파일을 찾을 수 없습니다.", vbExclamation
+    End If
+    
+    Exit Sub
+    
+ErrorHandler:
+    MsgBox "상태 확인 중 오류가 발생했습니다: " & Err.Description, vbCritical
+End Sub
+
+Public Sub ClearLogs()
+    Dim fso As Object
+    Dim logFiles As Variant
+    Dim i As Integer
+    
+    On Error GoTo ErrorHandler
+    
+    Set fso = CreateObject("Scripting.FileSystemObject")
+    logFiles = Array("capture_log.txt", "error_log.txt", "system_log.txt")
+    
+    For i = 0 To UBound(logFiles)
+        If fso.FileExists(CAPTURE_FOLDER & logFiles(i)) Then
+            fso.DeleteFile CAPTURE_FOLDER & logFiles(i)
+        End If
+    Next i
+    
+    MsgBox "로그 파일이 정리되었습니다.", vbInformation
+    
+    Exit Sub
+    
+ErrorHandler:
+    MsgBox "로그 정리 중 오류가 발생했습니다: " & Err.Description, vbCritical
+End Sub

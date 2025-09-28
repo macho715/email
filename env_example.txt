@@ -1,0 +1,32 @@
+# Email Processing Pipeline Environment Variables
+# Copy this file to .env and fill in your actual values
+
+# Email Configuration
+EMAIL_USERNAME=your_email@gmail.com
+EMAIL_PASSWORD=your_app_password
+EMAIL_FOLDER=INBOX
+
+# Database Configuration
+DATABASE_URL=sqlite:///email_processing.db
+
+# Security Keys
+ENCRYPTION_KEY=your_32_character_encryption_key_here
+JWT_SECRET_KEY=your_jwt_secret_key_here
+
+# External APIs
+SAMSUNG_CT_API_KEY=your_samsung_ct_api_key
+ADNOC_DSV_API_KEY=your_adnoc_dsv_api_key
+
+# Logging
+LOG_LEVEL=INFO
+LOG_FILE_PATH=logs/
+
+# Processing Settings
+BATCH_SIZE=50
+MAX_RETRIES=3
+CONFIDENCE_THRESHOLD=0.90
+
+# HVDC Project Settings
+PROJECT_MODE=PRIME
+COMPLIANCE_LEVEL=STRICT
+AUTO_TRIGGER_ENABLED=true

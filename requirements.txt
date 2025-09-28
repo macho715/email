@@ -1,0 +1,76 @@
+# MACHO-GPT v3.4-mini Dependencies
+# HVDC Project Email Knowledge Pipeline Requirements
+
+# Core Python packages
+# Note: Python version is managed by actions/setup-python in GitHub Actions
+
+# Data processing and analysis
+pandas>=1.5.0
+numpy>=1.21.0
+pydantic>=2.6.0
+
+# Configuration and serialization
+PyYAML>=6.0
+python-dotenv>=0.19.0
+configparser>=5.2.0
+
+# Date and time handling
+python-dateutil>=2.8.0
+pytz>=2022.1
+
+# Logging and monitoring
+structlog>=22.1.0
+colorama>=0.4.4
+loguru>=0.7.2
+python-json-logger>=2.0.7
+
+# API and web integration
+requests>=2.28.0
+httpx>=0.23.0
+aiohttp>=3.8.0
+supabase>=2.3.1
+vecs>=0.4.2
+
+# Email processing
+imaplib2>=3.6
+email-validator>=2.1.0
+extract-msg>=0.41.0
+
+# File processing and OCR
+Pillow>=9.0.0
+PyPDF2>=3.0.0
+python-magic>=0.4.24
+pytesseract>=0.3.10
+pdfplumber>=0.9.0
+
+# CLI and interface
+click>=8.1.0
+rich>=12.0.0
+typer>=0.6.0
+
+# Testing framework
+pytest>=7.1.0
+pytest-asyncio>=0.19.0
+pytest-cov>=3.0.0
+pytest-mock>=3.8.0
+
+# Code quality and formatting
+black>=22.6.0
+flake8>=5.0.0
+mypy>=0.971
+isort>=5.10.0
+
+# Development tools
+pre-commit>=2.20.0
+bandit>=1.7.4
+
+# Security and compliance
+cryptography>=41.0.7
+
+# HVDC Project specific
+beautifulsoup4>=4.12.2
+lxml>=4.9.3
+
+# Optional: Enhanced OCR capabilities
+# tesseract>=0.1.3
+# paddlepaddle>=2.3.0
